@@ -1,63 +1,96 @@
+#define TIMER_TO_USE_FOR_MILLIS 0
 #include <Arduino.h>
-#include <math.h>
+#include <avr/sleep.h>
 
-volatile int Dac[2];
-volatile uint8_t* Port[] = { &OCR1A, &OCR1B };
-volatile int Cycle = 0;
+#define adc_disable() (ADCSRA &= ~(1<<ADEN)) // disable ADC (before power-off)
 
-uint16_t GammaCorrection(uint8_t brightness);
+void TimerOneConfig();
 
-// Overflow interrupt
-ISR (TIMER1_OVF_vect) {
-  static int rem[2];
-  for (int chan=0; chan<2; chan++) {
-    int remain;
-    if (Cycle == 0) remain = Dac[chan]; else remain = rem[chan];
-    if (remain >= 256) { *Port[chan] = 255; remain = remain - 256; }
-    else { *Port[chan] = remain; remain = 0; }
-    rem[chan] = remain;
-  }
-  Cycle = (Cycle + 1) & 0x0F;
-}
+typedef struct LED_PINS{
+  int high_pin;
+  int low_pin;
+  volatile uint8_t status;
+};
 
-void analogWrite12 (int chan, int value) {
-  cli(); Dac[chan] = value; sei();
-}
+LED_PINS led_pins[19]{
+    {0,1,0},{1,0,0},{0,4,0},{4,0,0},
+    {2,4,0},{2,0,0},{0,2,0},{3,2,0},{2,3,0},{2,1,0},{1,2,0},
+    {3,4,0},{4,3,0},{1,4,0},{4,1,0},{1,3,0},{3,1,0},{0,3,0},{3,0,0}
+  };
+
+int period = 1000;
+unsigned long time_now = 0;
 
 void setup() {
-  // Timer/Counter1 doing PWM on OC1A (PB1) and OC1B (PB4)
-  TCCR1 = 1<<PWM1A | 1<<COM1A0 | 1<<CS10;
-  GTCCR = 1<<PWM1B | 1<<COM1B0;
-  TIMSK = TIMSK | 1<<TOIE1;
-  pinMode(1, OUTPUT);
-  pinMode(4, OUTPUT);
+
+  adc_disable();
+  set_sleep_mode(SLEEP_MODE_PWR_DOWN);
+
+  PORTB = 0;
+  DDRB = 0;
+  MCUCR |= (1 << PUD);
+
+  TimerOneConfig();
+  
 }
 
-void loop () {
-  for (int i = 0; i < 255; i++) {
-    analogWrite12(0,GammaCorrection(i));
-    delayMicroseconds(9295);
-  } 
-  for (int i = 0; i <= 62; i++) {
-    int led_sin = ((cos(i*0.1)+1.4)*106);
-    analogWrite12(0,GammaCorrection(led_sin));
-    delayMicroseconds(3000);
+void loop() {
+
+  for (int i = 0; i < 19; i++){
+    led_pins[i].status = 1;
+  //  time_now = millis();
+  //   while(millis() < time_now + period){
+  //       //wait approx. [period] ms
+  //   }
+  delay(33000);
   }
-  analogWrite12(0,GammaCorrection(255));  
-  delay(7000); 
-  for (int i = 0; i <= 62; i++) {
-    int led_sin = ((cos(i*0.1)+1.4)*106);
-    analogWrite12(0,GammaCorrection(led_sin));
-    delayMicroseconds(3000);
-  }  
-  for (int i = 255; i >= 0; i--) {
-    analogWrite12(0,GammaCorrection(i));
-    delayMicroseconds(31373);
-  }      
-  while(true);
+
+  for (int i = 0; i < 19; i++){
+    led_pins[i].status = 0;
+  }
+  cli();
+  sleep_enable();
+  sleep_bod_disable();
+  sleep_cpu();
 }
 
-uint16_t GammaCorrection(uint8_t brightness){
-  uint32_t brightness_squared = pow(brightness,2);
-  return brightness_squared >> 4;
+void TimerOneConfig(){
+  cli();
+
+  TCCR1 = 0;
+  TIMSK = 0;
+
+  TCCR1 |= (1 << CTC1);
+
+  TCCR1 |= (1 << CS12);
+  TCCR1 |= (1 << CS11);
+
+  OCR1A = 20;
+  OCR1C = 20;
+
+  TIMSK |= (1 << OCIE1A);
+
+  sei();
+}
+
+ISR (TIM1_COMPA_vect){
+  static volatile uint8_t count = 0;
+
+  PORTB = 0;
+  DDRB = 0;
+
+  if (count == 19){
+    count = 0;
+  }
+
+  if (led_pins[count].status == 1){
+
+    DDRB |= (1 << led_pins[count].high_pin);
+    DDRB |= (1 << led_pins[count].low_pin);
+    PORTB |= (1 << led_pins[count].high_pin);  
+
+  }
+
+  count++;
+
 }
